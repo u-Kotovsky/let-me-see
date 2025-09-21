@@ -1,14 +1,25 @@
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.SceneManagement;
 using UnityEngine.SpatialTracking;
 using UnityEngine.XR.Management;
+using VRC.Dynamics;
+using VRC.SDK3.Dynamics.Contact.Components;
+using VRC.SDK3.Dynamics.PhysBone.Components;
 #if LETMESEE_OPENXR_EXISTS
 using UnityEngine.XR.OpenXR;
 #endif
 
 namespace Resilience.LetMeSee
 {
+    public class LetMeSeeVrcPhysBoneColliderHelper : MonoBehaviour
+    {
+        public VRCPhysBone physBone;
+        public int[] colliders;
+    }
+    
     [InitializeOnLoad]
     public class LetMeSeeCore
     {
@@ -55,6 +66,8 @@ namespace Resilience.LetMeSee
         
         private GameObject _root;
         private Transform _cursor;
+        private Transform _leftController;
+        private Transform _rightController;
         private LineRenderer _lineRenderer;
 
         public bool Enabled
@@ -269,6 +282,29 @@ namespace Resilience.LetMeSee
                 Object.DestroyImmediate(strayObject);
                 strayObject = GameObject.Find(CursorHolderName);
             }
+            
+            // Remove empty colliders at the end of each VrcPhysBone.
+            // TODO: Maybe use component that specifies where that VrcPhysBoneCollider is at.
+            var allPhysBones = Object.FindObjectsOfType<VRCPhysBone>();
+            for (var i = 0; i < allPhysBones.Length; i++)
+            {
+                var physBone = allPhysBones[i];
+
+                Debug.Log($"Looking at {physBone.gameObject.name} physbone");
+                for (var i1 = physBone.colliders.Count - 1; i1 > 0; i1--)
+                {
+                    var physBoneCollider = physBone.colliders[i1];
+                    if (physBoneCollider != null)
+                    {
+                        break; // No more empties at the end.
+                        Debug.Log($"{physBone.gameObject.name}'s physbone has null collider at index {i1}, deleting..");
+                        physBone.colliders.RemoveAt(i1);
+                    }
+                    
+                    Debug.Log($"{physBone.gameObject.name}'s physbone has null collider at index {i1}, deleting..");
+                    physBone.colliders.RemoveAt(i1);
+                }
+            }
         }
 
         internal void DoHardStart()
@@ -307,6 +343,7 @@ namespace Resilience.LetMeSee
                 transform = { parent = _root.transform },
                 name = "CursorRenderer",
             }.transform;
+            
             _lineRenderer = _cursor.gameObject.AddComponent<LineRenderer>();
             _lineRenderer.sharedMaterial = new Material(Shader.Find("Resilience/LetMeSeeLine"));
             var color = LetMeSeeUserSettings.CursorColor;
@@ -329,6 +366,112 @@ namespace Resilience.LetMeSee
 
             _prevShowCursor = LetMeSeeUserSettings.ShowCursor;
             _cursor.gameObject.SetActive(LetMeSeeUserSettings.ShowCursor);
+            
+            // Controller stubs
+            _leftController = new GameObject
+            {
+                transform = { parent = _root.transform },
+                name = "LeftController",
+            }.transform;
+            _rightController = new GameObject
+            {
+                transform = { parent = _root.transform },
+                name = "RightController"
+            }.transform;
+            
+            // OpenXR InputSystem Tracked pose drivers
+            var trackedPoseDriverLeft = _leftController.gameObject.AddComponent<UnityEngine.InputSystem.XR.TrackedPoseDriver>();
+            trackedPoseDriverLeft.positionAction = new InputAction();
+            trackedPoseDriverLeft.positionAction.AddBinding("<XRController>{LeftHand}/devicePosition");
+            trackedPoseDriverLeft.rotationAction = new InputAction();
+            trackedPoseDriverLeft.rotationAction.AddBinding("<XRController>{LeftHand}/deviceRotation");
+            trackedPoseDriverLeft.trackingStateInput = new InputActionProperty(new InputAction());
+            trackedPoseDriverLeft.trackingStateInput.action.AddBinding("<XRController>{LeftHand}/trackingState");
+            
+            var trackedPoseDriverRight = _rightController.gameObject.AddComponent<UnityEngine.InputSystem.XR.TrackedPoseDriver>();
+            trackedPoseDriverRight.positionAction = new InputAction();
+            trackedPoseDriverRight.positionAction.AddBinding("<XRController>{RightHand}/devicePosition");
+            trackedPoseDriverRight.rotationAction = new InputAction();
+            trackedPoseDriverRight.rotationAction.AddBinding("<XRController>{RightHand}/deviceRotation");
+            trackedPoseDriverRight.trackingStateInput = new InputActionProperty(new InputAction());
+            trackedPoseDriverRight.trackingStateInput.action.AddBinding("<XRController>{RightHand}/trackingState");
+            
+            // VRC Contact Senders
+            var leftVrcContactSender = _leftController.gameObject.AddComponent<VRCContactSender>();
+            leftVrcContactSender.height = 1f;
+            leftVrcContactSender.radius = .1f;
+            leftVrcContactSender.collisionTags.AddRange(new[]
+            {
+                "HandL", "Hand"
+            });
+            
+            var rightVrcContactSender = _rightController.gameObject.AddComponent<VRCContactSender>();
+            rightVrcContactSender.height = 1f;
+            rightVrcContactSender.radius = .1f;
+            rightVrcContactSender.collisionTags.AddRange(new[]
+            {
+                "HandR", "Hand"
+            });
+            
+            // VRC PhysBone Colliders
+            var leftVrcPhysCollider = _leftController.gameObject.AddComponent<VRCPhysBoneCollider>();
+            leftVrcPhysCollider.height = 1f;
+            leftVrcPhysCollider.radius = .1f;
+            var rightVrcPhysCollider = _rightController.gameObject.AddComponent<VRCPhysBoneCollider>();
+            rightVrcPhysCollider.height = 1f;
+            rightVrcPhysCollider.radius = .1f;
+            
+            // Hook these colliders to each physbone we can find!!!!
+            var allPhysBones = Object.FindObjectsOfType<VRCPhysBone>();
+            for (var i = 0; i < allPhysBones.Length; i++)
+            {
+                var physBone = allPhysBones[i];
+                
+                Debug.Log($"Looking at {physBone.gameObject.name} physbone");
+
+                for (var i1 = physBone.colliders.Count - 1; i1 > 0; i1--)
+                {
+                    var physBoneCollider = physBone.colliders[i1];
+
+                    if (physBoneCollider == null)
+                    {
+                        Debug.Log($"{physBone.gameObject.name}'s physbone has null collider at index {i1}, deleting..");
+                        physBone.colliders.RemoveAt(i1);
+                    }
+                    else
+                    {
+                        // no more empties at the end
+                        break;
+                    }
+                }
+
+                if ((physBone.collisionFilter.allowOthers || physBone.collisionFilter.allowSelf)
+                    && physBone.radius > 0)
+                {
+                    // add controller's colliders
+                    physBone.colliders.AddRange(new[] {
+                        leftVrcPhysCollider, rightVrcPhysCollider
+                    });
+                }
+                else
+                {
+                    Debug.Log($"Skipped '{physBone.gameObject.name}' collider is too small or not allowed to collide.");
+                }
+                
+            }
+            
+            // Visuals
+            var leftFake = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            leftFake.transform.parent = _leftController.transform;
+            leftFake.transform.localPosition = Vector3.zero;
+            leftFake.transform.localRotation = Quaternion.identity;
+            leftFake.transform.localScale = Vector3.one * 0.2f;
+            var rightFake = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            rightFake.transform.parent = _rightController.transform;
+            rightFake.transform.localPosition = Vector3.zero;
+            rightFake.transform.localRotation = Quaternion.identity;
+            rightFake.transform.localScale = Vector3.one * 0.2f;
+            
             
             if (Application.isPlaying)
             {
